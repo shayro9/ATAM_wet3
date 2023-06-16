@@ -2,13 +2,15 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <sys/types.h>
+/*
 #include <syscall.h>
 #include <sys/ptrace.h>
-#include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/reg.h>
 #include <sys/user.h>
 #include <unistd.h>
+ */
 #include <errno.h>
 #include <string.h>
 #include <stdbool.h>
@@ -38,13 +40,12 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
     *error_val = 0;
     FILE* file = fopen(exe_file_name, "rb");
 
-    Elf64_Ehdr header;
-    fread(&header, sizeof (Elf64_Ehdr), 1, file);
-
     if(file == NULL) {
-        fclose(file);
         return 0;
     }
+
+    Elf64_Ehdr header;
+    fread(&header, sizeof (Elf64_Ehdr), 1, file);
 
     if (header.e_type != ET_EXEC){
         *error_val = -3;
@@ -52,8 +53,11 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
         return 0;
     }
 
-    Elf64_Shdr* section_header_adrs = (Elf64_Shdr*)(&header + header.e_shoff);
-    Elf64_Shdr section_str = section_header_adrs[header.e_shstrndx]; //section names
+    fseek(file, header.e_shoff, SEEK_SET);
+    Elf64_Shdr section_headeradrs;
+    fread(&section_headeradrs, header.e_shentsize,1,file);
+    Elf64_Shdr * section_header_adrs = &section_headeradrs;
+    Elf64_Shdr section_str = section_header_adrs[header.e_shstrndx];
 
     char* string_table = (char *) (&header + section_str.sh_offset);
     Elf64_Half sections_count = header.e_shnum;
@@ -61,14 +65,12 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
     Elf64_Sym* r_symb;
     char* strtab;
     int symbols_count = 0;
-    int local_symbols_index = 0;
 
     for (int i = 0; i < sections_count; ++i) {
         char* section_name = string_table + section_header_adrs[i].sh_name;
         if(!strcmp(".symtab", section_name) || section_header_adrs[i].sh_type == SYMTAB){
             r_symb = (Elf64_Sym*)(&header + section_header_adrs[i].sh_offset);
             symbols_count = section_header_adrs[i].sh_size / section_header_adrs[i].sh_entsize;
-            local_symbols_index = section_header_adrs[i].sh_info;
         }
         else if(!strcmp(".strtab", section_name) || section_header_adrs[i].sh_type == STRTAB) {
             if ((char*) (&header + section_header_adrs[i].sh_offset) != string_table) {
@@ -107,7 +109,7 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
         *error_val = -1;
 
     fclose(file);
-	return 0;
+    return 0;
 }
 
 int main(int argc, char *const argv[]) {
