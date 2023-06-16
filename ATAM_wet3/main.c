@@ -35,48 +35,78 @@
  * return value		- The address which the symbol_name will be loaded to, if the symbol was found and is global.
  */
 unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val) {
-	*error_val = 0;
-    FILE* file = fopen(exe_file_name, "r");
+    *error_val = 0;
+    FILE* file = fopen(exe_file_name, "rb");
 
-    if(file == NULL)
-        return -11;
-    Elf64_Ehdr* r_info = (Elf64_Ehdr*)file;
-    if (r_info->e_type != ET_EXEC){
-        return -3;
+    Elf64_Ehdr header;
+    fread(&header, sizeof (Elf64_Ehdr), 1, file);
+
+    if(file == NULL) {
+        fclose(file);
+        return 0;
     }
-    Elf64_Shdr* section_header_adrs = (Elf64_Shdr*)((char*)file + r_info->e_shoff);
-    Elf64_Shdr section_str = section_header_adrs[r_info->e_shstrndx];
 
-    char* string_table = (char*)file + section_str.sh_offset;
-    Elf64_Half sections_count = r_info->e_shnum;
+    if (header.e_type != ET_EXEC){
+        *error_val = -3;
+        fclose(file);
+        return 0;
+    }
+
+    Elf64_Shdr* section_header_adrs = (Elf64_Shdr*)(&header + header.e_shoff);
+    Elf64_Shdr section_str = section_header_adrs[header.e_shstrndx]; //section names
+
+    char* string_table = (char *) (&header + section_str.sh_offset);
+    Elf64_Half sections_count = header.e_shnum;
 
     Elf64_Sym* r_symb;
-    char *strtab;
+    char* strtab;
     int symbols_count = 0;
+    int local_symbols_index = 0;
+
     for (int i = 0; i < sections_count; ++i) {
         char* section_name = string_table + section_header_adrs[i].sh_name;
         if(!strcmp(".symtab", section_name) || section_header_adrs[i].sh_type == SYMTAB){
-            r_symb = (Elf64_Sym*)((char*)file + section_header_adrs[i].sh_offset);
+            r_symb = (Elf64_Sym*)(&header + section_header_adrs[i].sh_offset);
             symbols_count = section_header_adrs[i].sh_size / section_header_adrs[i].sh_entsize;
+            local_symbols_index = section_header_adrs[i].sh_info;
         }
         else if(!strcmp(".strtab", section_name) || section_header_adrs[i].sh_type == STRTAB) {
-            if ((char *) file + section_header_adrs[i].sh_offset != string_table) {
-                strtab = ((char *) file + section_header_adrs[i].sh_offset);
+            if ((char*) (&header + section_header_adrs[i].sh_offset) != string_table) {
+                strtab = (char *) (&header + section_header_adrs[i].sh_offset);
             }
         }
     }
+
+    int local_count = 0;
     for(int i = 0; i < symbols_count; i++){
         char* curr_symbol_name = strtab + r_symb[i].st_name;
         if(!strcmp(symbol_name, curr_symbol_name)) {
             if(ELF64_ST_BIND(r_symb[i].st_info) == GLOBAL) {
-                Elf64_Addr value = r_symb[i].st_value;
-
+                Elf64_Half ndx = r_symb[i].st_shndx;
+                if(ndx == 1 || ndx == 2)
+                {
+                    *error_val = 1;
+                    fclose(file);
+                    return r_symb[i].st_value;
+                }
+                else
+                {
+                    *error_val = -4;
+                    fclose(file);
+                    return 0;
+                }
             }
             else {
-                *local_count += 1;
+                local_count += 1;
             }
         }
     }
+    if(local_count > 0)
+        *error_val = -2;
+    else
+        *error_val = -1;
+
+    fclose(file);
 	return 0;
 }
 
